@@ -1,0 +1,900 @@
+---
+title: "Final_Project"
+author: "Lam Bui (a1923599)"
+date: "2025-09-19"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 1: Introduction to the Data Set
+
+The data set is taken from Google's data repository on the Covid-19 pandemic. More specifically, 4 different datasets were selected; epidemiology, demographics, health and economics data. Before introducing the specifics of each data set, the code below goes through the process of importing, joining and cleaning the three datasets. This is done using the readr and tidyverse package. All of the data sets are loaded into their own data frame as shown below. 
+
+```{r Importing Data}
+pacman::p_load(magrittr, tidyverse, ggplot2, dplyr, knitr)
+
+demographics <- read.csv("data/demographics.csv")
+economy <- read.csv("data/economy.csv")
+epidemiology <- read.csv("data/epidemiology.csv")
+health <- read.csv("data/health.csv")
+index <- read.csv("data/index.csv")
+
+head(epidemiology, 3)
+head(demographics, 3)
+head(economy, 3)
+head(health, 3)
+```
+As a brief preview the epidemiology data set captures Covid cases, deaths and recovery statistics for every day from 2020 to 2022 with the subject being different regions labelled by the location key. The demographics' data set captures population statistics, the economics data set captures economical statistics such as GDP and human capital index, and finally the health dataset records healthcare and quality of living statistics of different regions listed within the data. These data sets captures the regions' average statistic from 2020-2022. The index data set is imported as a guide to rename the different locations with their respective location keys later on. 
+
+
+## Combining all datasets and selecting useful variables
+
+Here all of the data frames of th datasets are joined together onto a single data frame. The main data frame is epidemiology and the remaining data frames are joined onto it via the location_key variable; the final data frame with all of the data sets is called uncleaned_df. Afterwards the data frame is transformed into a tibble for cleaner visualisation and better functionality with the R packages that will be used later on such as ggplot, dplyr and tidyr. 
+```{r Joining Data}
+uncleaned_df <- left_join(epidemiology, demographics, by = "location_key")
+
+uncleaned_df <- left_join(uncleaned_df, economy, by="location_key")
+
+uncleaned_df <- left_join(uncleaned_df, index, by="location_key")
+
+uncleaned_df <- left_join(uncleaned_df, health, by="location_key")
+
+uncleaned_df <- as.tibble(uncleaned_df)
+uncleaned_df
+```
+
+Note that one limitation with the data is that although the epidemiology data set is a time series dataset, the economy and demographics data are both cross sectional data sets and so when joining the data sets the population and economic variable's values per each date observation should be taken as an average or a bench mark and not the accurate value for that date. 
+
+The tibble above shows this data frame currently contains 12,525,825 observations and 58 variables. That is too much data for the purpose of this investigation, so this data frame will be simplified as follows. The epidemiology data set not only contains statistics for just countries but also the country and its individual regions are represented by separate rows within the data. Country level observations are represented with a two letter location key e.g., AF for Afghanistan and a region in Afghanistan would be represented by the two letters of the country with another three letter code e.g., AF_BAL. To simplify the data the investigation will only be looking at country level observations; hence to code below specifically filters for location keys with two letters. Otherwise the code below also selects specific variables of interest for further investigation.
+```{r Selecting and Cleaning Data}
+uncleaned_df1 <- uncleaned_df %>% filter(nchar(location_key) == 2) %>%
+  select(date, 
+         country_name, cumulative_confirmed, cumulative_deceased, gdp_usd, 
+         gdp_per_capita_usd, 
+         population, 
+         population_rural, 
+         population_urban, 
+         population_density, 
+         population_age_60_69, 
+         population_age_70_79, 
+         population_age_80_and_older, 
+         health_expenditure_usd, 
+         smoking_prevalence,
+         life_expectancy,
+         nurses_per_1000)
+
+#Changing the date column to a date type variable
+uncleaned_df1$date <- as.Date(uncleaned_df1$date, format="%Y-%m-%d")
+
+summary(uncleaned_df1)
+
+```
+
+## Dealing with NAs
+
+All of the ranges and values looks fine for all of the variables, however there are a some missing values present. The code below shows the selected variables and their proportion of missing data
+```{r}
+colMeans(is.na(uncleaned_df1)) * 100   #percentage missing per column
+
+```
+For this investigation, it is determined that if missing data makes up of less than 10% of the variable's observations then it can be seen as random noise. Therefore, variables that have a higher proportion of missing values are considered to be affected by systematic missingness. For each of these variables, the observations are grouped within their continental region using the R countrycode package. The regional average is then used as the imputed value for the missing data. The main limitation with this approach is that many values could easily be understated or overstated, for example, countries that had missing GDP most likely are poorer countries that does not report GDP, therefore using the average of that countries' region to represent its missing data is not a true representation and therefore is something to be considered when interpreting future results. 
+
+```{r}
+
+#Imputing NAs
+pacman::p_load(countrycode) 
+
+uncleaned_df1$region <- countrycode(uncleaned_df1$country_name,
+                         origin = "country.name",
+                         destination = "region")
+
+#Manually filling region since these countries 
+#are not listed in countrycode package
+uncleaned_df1 <- uncleaned_df1 %>% mutate(region = case_when(
+  country_name == "Mayotte" ~ "Sub-Saharan Africa",
+  country_name == "Kosovo" ~ "Europe & Central Asia",
+  country_name == "Micronesia" ~ "East Asia & Pacific",
+  country_name == "Réunion" ~ "Sub-Saharan Africa",
+  country_name == "Saint Helena" ~ "Sub-Saharan Africa",
+  country_name == "Wallis and Futuna" ~ "East Asia & Pacific",
+  country_name == "Western Sahara" ~ "Middle East & North Africa",
+  TRUE ~ region
+))
+
+uncleaned_df1 %>% distinct(region)
+
+uncleaned_df2 <- uncleaned_df1 %>%
+  group_by(region) %>%
+  mutate(
+    across(
+      c(health_expenditure_usd, smoking_prevalence, life_expectancy, gdp_per_capita_usd, gdp_usd, nurses_per_1000),
+      ~ ifelse(is.na(.x), mean(.x, na.rm = TRUE), .x)
+    )
+  ) %>%
+  ungroup()
+
+#Finding number of rows with at least 1 missing/NA value. 
+
+colSums(is.na(uncleaned_df2))
+
+```
+The remaining missing values are seen as random noise and therefore is omitted. Assigning the final data frame as covidDf. 
+```{r}
+covidDf <- na.omit(uncleaned_df2)
+covidDf$region <- as.factor(covidDf$region)
+covidDf
+
+```
+
+## Introducing the final data set
+
+For this investigation the covidDf data set on Covid-19 will be used. The subject of the data set are countries and that data set itself captures different basic statistics regarding the affect of Covid, and the countries' population, GDP, number of nurses per 1000 people etc... from 2020 to 2022. There are 207,149 rows and 18 columns with the majority of the variables being numerical, the countries' region is the only factor and country name is the only character variable.  
+
+The main goal of this investigation is to explore the relationship between the number of Covid cases and Covid deaths of a country and different factors like population demographics, economy and healthcare. Therefore, these variables selected were because they could represent these factors, propose an interesting relationship with Covid numbers as well as not having too many missing values. For further detail of each of the variables in the data set refer to the table below.
+
+```{r}
+
+main_stats <- c(
+  "date", "country_name", "cumulative_confirmed", "cumulative_deceased", "gdp_usd",
+  "gdp_per_capita_usd", "population", "population_rural", "population_urban",
+  "population_density", "population_age_60_69", "population_age_70_79",
+  "population_age_80_and_older",  "health_expenditure_usd", "smoking_prevalence",
+  "life_expectancy", "nurses_per_1000", "region"
+)
+
+des <- c("date (YYYY-MM-DD)", "Name of country (211 different countries)", 
+         "Cumulative sum of cases confirmed after positive test",
+         "Cumulative sum of deaths from a positive COVID-19 case",
+         "Growth Domestic Product in USD", "GDP per Capita in USD",
+         "Total count of people", "Population in rural area",
+         "Population in urban area",
+         "Population per squared kilometer of land area",
+         "Estimated population aged bewteen 60 to 69",
+         "Estimated population aged bewteen 70 to 79",
+         "Estimated population aged bewteen 80 and older",
+         "Government health expenditure per capita", "% of smokers in population", 
+         "Average years an individual is expected to live",
+         "Nurses per 1000 people", "Regional classification of the countries")
+
+stats_table <- data.frame(Main_Stats = main_stats, Descriptions = des)
+knitr::kable(stats_table)
+```
+
+# Part 2: Graphical Analysis of the Data Set
+
+## Bar Chart
+
+This first plot is a simple bar chart that describes each region and their Covid cases and Covid deaths count from 2020 till 2022. The aim of this plot is to show _which regions out of the 7 global regions were most affected by Covid 19 via deaths and infection_. 
+
+Since Covid deaths and cases are cumulative the max value for cumulative_confirmed and cumulative_deceased should represent the total deaths/cases of Covid for each any given country by the end of the year. Therefore, in order to produce this plot, the data is firstly grouped by year and country, then the max cumulative confirmed and deceased variables of each country were sumarised as the total confirmed/deceased values for the aggregated data. 
+
+```{r}
+cols_to_keep <- setdiff(names(covidDf), c("cumulative_confirmed", "cumulative_deceased", "date", "country_name"))
+
+aggregated_data_by_year <- covidDf %>% 
+    mutate(year = year(date)) %>%
+    group_by(year, country_name) %>%
+    summarise(total_confirmed = max(cumulative_confirmed),
+              total_deceased = max(cumulative_deceased),
+              across(all_of(cols_to_keep), first)
+    )
+```
+Since there are over 200 different countries in the data set, in order to simplify for this plot the previous aggregated data is then grouped by the region of each country to find the total confirmed Covid cases and deaths of each region specified in the data set. The final data frame that will be used for the bar plot, `covid_deaths_n_cases` is shown below.
+```{r}
+covid_deaths_n_cases <- aggregated_data_by_year %>%
+  group_by(region) %>%
+  summarise(
+    total_confirmed = sum(total_confirmed),
+    total_deceased = sum(total_deceased),
+  ) 
+
+covid_deaths_n_cases
+
+```
+
+The plot is created using ggplot and the `geom_bar()` function as shown below. To create a stacked bar plot that incorporates both the total_deceased and total_confirmed statistics, the data frame is converted from a wide format to a long format using the `pivot_longer()` function from the tidyr package. The x axis containts the different regions and the y axis contains to total count of covid cases and deaths. The `reorder()` function arranges the columns in the bar chart in descending order of covid deaths and cases. Legends, axis labels and chart titles were added and x axis text was titled for more visual clarity.
+```{r}
+covid_deaths_n_cases %>%
+    pivot_longer(cols = c(total_confirmed, total_deceased),
+                 names_to = "metric",
+                 values_to = "count") %>%
+    ggplot(aes(x = reorder(region, -count), y = count, fill = metric)) +
+      geom_bar(stat = "identity") +
+      labs(
+        title = "COVID-19 Impact by Region",
+        x = NULL,
+        y = "Count",
+        fill = "Metric"
+      ) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+covid_deaths_n_cases %>% ggplot(aes(x = reorder(region, - total_deceased), y = total_deceased))+
+  geom_bar(stat = "identity") +
+  labs(x = NULL, title = "COVID-19 Deaths by Region") +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+__Figure 1.1:__ The figure contains 2 bar plots. The first showing the overall affect of Covid in terms of deaths and cases grouped by regions from 2020 to 2021 and another bar plot expanding on just Covid deaths for clearer visualisation. Both plots show that Covid cases and Covid deaths have a very linear relationship. The region most affected by Covid overall is Europe & Central Asia.
+
+This plot is a simple but clear visualisation of which regions were most affected by Covid 19 from 2020 to 2022. In addition to showing which regions were most affected by Covid, as a preliminary plot to assess the data, Figure 1.1 also shows that although there are regions that have a more clear cut ratio of covid cases and covid deaths e.g., Europe & Central Asia and Sub-Saharan Africa which both respectively have the highest and lowest Covid cases and deaths count, in other words the most affected and least affected by Covid, there can be some deviation. Consider North America, which has the second highest Covid case/death count, is only third when looking just in terms of Covid deaths behind Latin America & Caribbean. This graphically shows that there is an inherent difference in these regions whether it be healthcare, population demographics or other factors that means more Covid cases does not necessarily equate to higher deaths from Covid. 
+
+**************
+
+## Line Plot
+
+This main aim of this part is to produce a simple line plot to show whether _there is a difference in spreading of Covid infection for urban and rural countries/regions?_. 
+
+Firstly, a `group_by()` function is used to aggregate the data on a regional level per each date recorded instead of country level as captured in the covidDf data set, this new data frame is labelled `aggregated_region_date`. Afterwards using the population_urban and population_rural variables, an urban to rural population ratio is calcuted. In addition to this, another variable called population_type is made under an ifelse condition, where if an observation has an urban_rural_ratio of less than 1, that region has a higher rural population than urban population, therefore it will be classified as "Rural Regions", otherwise the region will be classified as "Urban Regions" under the population type variable. The cases_per_100k variable was also calculated to standardise the differences in regional population as well as to more clearly interpret whether urban residents individually were at more risk.
+```{r}
+aggregated_region_date <- covidDf %>% group_by(region, date) %>%
+  summarise(cumulative_confirmed = sum(cumulative_confirmed),
+            population = sum(population),
+            population_rural = sum(population_rural),
+            population_urban = sum(population_urban), .groups = "drop")
+
+aggregated_region_date <- aggregated_region_date %>% 
+  mutate(
+    urban_rural_ratio = (population_urban/population_rural),
+    population_type = ifelse(urban_rural_ratio < 1, "Rural Regions", "Urban Regions"),
+    cases_per_100k = (cumulative_confirmed/population)*100000
+  )
+
+#Changing population_type of a factor variable
+aggregated_region_date$population_type <- factor(aggregated_region_date$population_type) 
+```
+
+Using another `group_by()` function, the data frame is aggregated further by the region type i.e., an Urban Region or a Rural Region based on previously established population_type variable. Finally, the two plots are made using ggplot and the `geom_line()` function. The `color=population_type` and `group=population_type` parameters is used to produce and colour-code two different lines in the line plot for Urban regions and Rural Regions. The line size is set to 1.5 and labels are added for extra visual clarity. The two plots are then joined together using the pacthwork R package. 
+```{r}
+aggregated_poptype <- aggregated_region_date %>%
+  group_by(population_type, date) %>%
+  summarise(cumulative_confirmed = sum(cumulative_confirmed),
+            cases_per_100k = sum(cases_per_100k))
+
+f2p1 <- aggregated_poptype %>%
+  ggplot(aes(x = date, y =  cumulative_confirmed, color=population_type, group=population_type)) +
+  geom_line(size = 1.5) +
+  labs(
+    title = "Cumulative confirmed cases",
+    x = "Date",
+    y = "Confirmed Covid Cases",
+    color = "Population Type",
+    legend = NULL
+  ) +
+  theme_minimal()+
+  theme(legend.position = "none")
+
+f2p2 <- aggregated_poptype %>%
+  ggplot(aes(x = date, y =  cases_per_100k, color=population_type, group=population_type)) +
+  geom_line(size = 1.5) +
+  labs(
+    title = "Cases per 100k population",
+    x = "Date",
+    y = "Confirmed Covid Cases per 100k people",
+    color = "Population Type"
+  ) +
+  theme_minimal()
+
+library(patchwork)
+f2p1 + f2p2
+```
+__Figure 1.2:__ Line plots showing the number of confirmed Covid cases/cases per 100k people overtime (2020-2022) grouped by rural regions and urban regions i.e., regions that has a larger rural population compared to urban population and vice versa. It can be seen that from start to end regions with higher urban populations consistently have higher Covid cases compared to more rural populated regions. 
+
+As observed from Figure 1.2, both raw cumulative cases and cases per 100k people overtime shows nearly the exact same trend. The Urban Regions line is consistently higher and steeper, especially from 2021 onward showing that regions with a higher urban population are associated with higher Covid cases as well as faster transmission of Covid as shown by the higher growth rate. On the contrary, the red line representing regions with a higher rural population experiences significantly slow growth and plateaus at a lower level, either indicating fewer outbreaks and less Covid impact; the probability of this difference is primarily due to unreported cases in rural regions is possible, but because of how large the difference is, it is unlikely. Overall, the plot shows a strong association between urbanisation and higher Covid case counts.
+
+**************
+
+## Violin Plot 
+
+For this part of the investigation, the primary question is - _is there a difference in Covid death numbers for countries with older populations vs countries with younger populations?_
+
+To answer this, first the data needs to be aggregated further by country name instead of just year so that values like total_confirmed and total_deceased represents the total cases and deaths across 2020 to 2022. This turns the data from a time series to a cross sectional data set, this is important to do as the values for population are fixed due to the limitations of the data. 
+```{r}
+aggregated_data <- aggregated_data_by_year %>% group_by(country_name) %>%
+    summarise(total_confirmed = sum(total_confirmed),
+              total_deceased = sum(total_deceased),
+              across(all_of(cols_to_keep), first))
+```
+
+For this analysis, people age 60 and above will be considered elderly and potentially of higher risks from Covid. Another variable, `elderly_pop_proportion` is calculated to capture the proportion of a country's population that are considered elderly. 
+```{r}
+aggregated_data <- aggregated_data %>% 
+  mutate(elderly_pop_proportion = 100*(population_age_60_69 + population_age_70_79 + population_age_80_and_older)/population)
+
+
+summary(aggregated_data$elderly_pop_proportion)
+```
+The summary statistics above shows that if a country has ~21.8% or more of their population being elderly individuals then that country is within the top 75% for this metric. Using this information, rounding 21.8 down to 20%, countries with an elderly population proportion higher than 20% will be considered to have an "Older Population" whereas 20% or less will be considered "Younger Population" countries. These conditions are captured in the factor variable `age_group` created using the code and the `ifelse` logic shown below. Additionally, using raw total Covid death count could be misleading as countries with a larger population with naturally higher death counts regardless of age structure could inflate the values for this analysis. Therefore to adjust for population size, the plot will use death counts per 100k people. The death_per_100k variable is also log transformed to account for skewness in the variable. 
+```{r}
+aggregated_data <- aggregated_data %>% 
+  mutate(
+    age_group = ifelse(elderly_pop_proportion > 20, "Older Population", "Younger Population"),
+    death_per_100k = (total_deceased/population) * 100000,
+    log10_death_per_100k = log10(((total_deceased/population) * 100000)+1)
+  )
+aggregated_data$age_group <- factor(aggregated_data$age_group)
+```
+
+Using ggplot in combination with the `geom_violin` and `geom_boxplot` functions a violin plot is produced to showcase the distribution of Covid deaths for younger and older population countries. 
+```{r}
+ggplot(aggregated_data, aes(x = age_group, y = log10_death_per_100k, fill = age_group)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, fill = "white") +
+  labs(
+    x = NULL,
+    y = "Log10(Total Covid Deaths per 100k + 1)",
+    title = "Distribution of Covid Deaths per 100k people by Age Group"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+__Figure 1.3:__ Violin plot with layered box plots comparing the distribution of Covid-19 deaths from countries with younger vs. countries with older populations across 2020 to 2022. The death counts are standardised per 100k people and log transformed to provide a clearer comparison between older and younger populations. The curvature of the violin plot shows the density of countries at different 'death levels' and the white boxplots inside shows the median and interquartile range (IQR). It is seen that countries with older population proportion have higher median death counts and lower spread. 
+
+Shown in figure 1.3, both violins shows long tails which indicating some countries had very low death counts compared to the average. The lower spread for countries with older populations could suggest that these countries experienced more similar levels of Covid impact compared to nations with younger populations; this could also be due to the lower sample size. Overall, there is a visible difference between the distribution of Covid deaths in the older and younger populations. There appears to be a higher concentration of countries with high elderly population proportion at high death levels comparatively. 
+
+Confidence intervals (CI) for both populations of countries could also be used to further test these claims. 
+
+The formula for a confidence interval of a normally distributed random variable is as follows: 
+$$ 
+CI = \bar{x} \pm z \cdot \frac{s}{\sqrt{n}} 
+$$
+For this analysis, a 95% CI will be used where the z value can be found using the function `qnorm(1-(0.05/2))`. Using the formula above, the code below calculates all of the necessary values and produces the CIs for older and younger population countries. Afterwards the CI is converted back into a standard death scale instead of log10 for easier interpretation. 
+```{r}
+older_pop <- aggregated_data %>% filter(age_group == "Older Population") 
+
+nO <- length(older_pop$log10_death_per_100k)
+muO <- mean(older_pop$log10_death_per_100k)
+z <- qnorm(1-(0.05/2))
+sO <- sd(older_pop$log10_death_per_100k)
+uprCI_O <- muO + z * (sO/sqrt(nO))
+lwrCI_O <- muO - z * (sO/sqrt(nO))
+CI_O_log <- c(lwrCI_O, uprCI_O)
+CI_O_standard <- 10^CI_O_log - 1
+
+younger_pop <- aggregated_data %>% filter(age_group == "Younger Population") 
+
+nY <- length(younger_pop$log10_death_per_100k)
+muY <- mean(younger_pop$log10_death_per_100k)
+sY <- sd(younger_pop$log10_death_per_100k)
+uprCI_Y <- muY + z * (sY/sqrt(nY))
+lwrCI_Y <- muY - z * (sY/sqrt(nY))
+CI_Y_log <- c(lwrCI_Y, uprCI_Y)
+CI_Y_standard <- 10^CI_Y_log - 1 #10^CI - 1 undoes the log10 transformation
+
+#Putting the CIs into a tibble
+tibble(
+  Variable = c("Older Population", "Younger Population"), 
+  `Lower Bound` = c(CI_O_standard[1], CI_Y_standard[1]),
+  `Upper Bound` = c(CI_O_standard[2], CI_Y_standard[2]),
+  `Mean Value` = 10^c(muO, muY) - 1
+)
+
+```
+With these results we are 95% confident that the true population mean Covid death count per 100K people between 2020 and 2022 of countries with an older population is between 255 and 420 deaths. For countries with a younger population we are 95% confident that the true mean Covid death count is between 44 and 76 deaths. 
+
+Due to the lower sample size the range both confidence intervals could be considered large.. There is overall higher variability especially for the sample of countries with older population. However, the results show that both of the intervals do not overlap i.e., the upper bound for the younger population interval (76 deaths) sits below the lower bound for the older population interval (255 deaths). This shows that there is a significant statistical difference for the distribution Covid death per 100k people between countries with older and younger population proportions. 
+
+This could also be further verified using a two sample t-test shown with code below
+```{r}
+t.test(older_pop$log10_death_per_100k, younger_pop$log10_death_per_100k, alternative = "two.sided")
+```
+The results above shows a p value of less than 2.2x10^-16. This can be interpreted as; we are 99% confident that there is a statistical difference in the population mean Covid deaths of countries with older population proportions and countries with a younger population.
+
+The two sample t-test 95% CI is (0.584, 0.905) in log10 scale; this needs to be interpreted a little differently than before in order to check the statistical significance in the difference of the two populations. Consider the operation of subtracting logs:
+$$ 
+log(X_O) - log(X_Y) = log(\frac{X_O}{X_Y})
+$$
+Therefore, if the values for Covid deaths were originally log transformed, then the back transformation to standard death units would give a ratio between the two populations instead. So the CI is still calculated as follows:
+```{r}
+t_uprCI <- 10^0.9051737-1
+t_lwrCI <- 10^0.5844523-1
+c(t_lwrCI, t_uprCI)
+```
+However it must be interpreted as ; we are 95% confident that the true mean Covid death count per 100k people of countries with older populations is between 2.841 to 7.038 times the countries with a younger population proportion. 
+
+**************
+
+## Scatter Plot
+
+To establish a relationship between a countries' smoking prevalence and the risk of death from  Covid-19 a scatter plot is produced. The aim of this plot is to answer whether _does more countries with more smoking prevalance have a higher likelihood of worse Covid death counts?_. This will be done by analysing the created plot and comparing the number of Covid deaths from 2020 to 2022 of a country against a countries' smoking prevalence
+
+Similar to the previous violin plot, using the raw total covid death count potentially could lead to misleading visualisations of the data since it does not account for the fact that higher populations would mean naturally higher death counts from Covid. Therefore this visualisation will also use the variable `death_per_100k`
+
+
+The graph is made using ggplot and the `geom_point()` function. `death_per_100k` is the y axis and population_density for the x axis, additionally, the `size = gdp_per_capita_usd` parameter maps the size of each data point to its respect gdp per capita in the aggregated_data data frame for further analysis of these variable's interactions. Each data point is also colour coded by their respective region and the `scale_size()` function scales the potential sizes of the data points from a value of 2 to 10 for a clearer plot.
+```{r}
+
+aggregated_data %>% 
+  ggplot(aes(x = smoking_prevalence, 
+                               y = death_per_100k,
+                               size = gdp_per_capita_usd,
+                               color = region)) +
+  geom_point() +
+  scale_size(range = c(2, 10)) +
+  labs(
+    title = "Covid-19 Cases per 100k vs Smoking Prevalence",
+    x = "Smokers as a % of population",
+    y = "Covid deaths per 100k people"
+  )
+  
+```
+__Figure 1.4:__ Scatter/bubble plot showing the relationship between Covid deaths per 100k people and the countries' smoking prevalence. Each bubble represents one country with the bubble sizes representing the GDP per capita in USD of each country, the countries are also colour coded with their respective region. The plot shows that there is not a very clear relationships between Covid deaths and smoking, there are many countries with similar smoking prevalence but with widely varying levels of confirmed Covid cases.
+
+Figure 1.4 shows that smoking prevalence by itself does is not a strong explanatory factor for Covid death rates and that other variables likely play a much larger role. With closer inspection, countries in Europe & Central Asia specifically does show a moderate postive linear relationship between smoking prevalence and death counts, but the same cannot be confidently said for the other regions. Other interesting observations from the plot includes visible regional clustering for smoking prevalence e.g., Europe & Central Asia is primarily concentrated around 30-40% of smokers in population. South Asia & Sub-Saharan Africa are grouped closer to the front with a lower population of smokers. It is also interesting to note that the GDP per capita for each country when distributed by smoking prevalence forms almost a bell-curve-like pattern. Countries with generally smaller GDP either have a relatively low smoking prevalence (15%<), or a higher smoking prevalence (>35%), countries that appears to have the highest GDPs sit in the middle around 20-30%. 
+
+**************
+
+## Heatmap
+
+The aim of this plot will be to _show the correlation between all numerical variables within the covidDf data set_. This is done by using a heatmap to show the linear relationships strengths of the different variables using the reshape2 and scales R packages. 
+
+The code below selects all of the numerical variables excluding the population age categories variables to improve the plot's clarity as they are primarily represented within the elderly_pop_proportion variable. The `cor()` function is used to generate the correlation coefficients for all of the variable combinations, these are stored in the cordata variable. 
+```{r}
+pacman::p_load(reshape2, scales) #Loading in the required packages
+
+heatmap_df <- aggregated_data %>%
+  select(2:16, elderly_pop_proportion, -population_age_60_69, -population_age_70_79, -population_age_80_and_older)
+
+cordata <- cor(heatmap_df)
+```
+
+The `melt()` function below takes the correlation data and reshapes it into a long data format that is suitable for heatmaps. In essence, the `melt()` function creates a data frame with 3 columns; Var1, Var2 and value. The names of the data set's variables are stored in Var 1 and Var2 and the correlation coefficients of the corresponding variables is contained in the value column. The values are also rounded to 2 digits.
+```{r}
+heatmap_data <- melt(cordata)
+heatmap_data <- heatmap_data %>%
+  mutate(across(where(is.numeric), ~  round(., digits = 2)))
+```
+
+Using ggplot and the `geom_tile()` function the heatmap is created by plotting Var1 of the heatmap_data on the x axis and Var2 on the y axis. The gradient scale is added to help visualise the strength of each linear relationship better e.g., stronger relationships with coefficients closer to a value of 1 has a darker red colour whilst weaker relationships will appear a lighter yellow.  
+```{r}
+heatmap_data %>% ggplot(aes(x = Var1, y = Var2, fill = value, label = value)) +
+  geom_tile() +
+  geom_text(size = 2.5) +
+  labs(title = "Correlation Heatmap of Covid 2020-2022 Statistics",
+       x = NULL, y = NULL) +
+  scale_fill_gradient(low = "lightyellow", high = "red") +
+  theme_minimal() +                       
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),
+      axis.text.y = element_text(size = 8))
+```
+__Figure 1.5:__ The heatmap shows the correlation between numeric variables within the covidDf dataset. The darker the red colour on the tiles the higher the correlation between the two corresponding variables. For example, the most highly correlated variables are total_deceased and total_confirmed, which makes sense as you would generally expect, higher total cases of Covid would naturally mean higher deaths from Covid.
+
+Shown in Figure 1.5, a majority of the variables are weakly positvely correlated with each other. There are some strongly correlated variables for obvious reasons such as total_deceased & total_confirmed or life_expectancy and elderly_pop_proportion or even government health expenditures and nurses_per_1000. Otherwise there are also some interesting relationships to note. For example, total_deceased and total_confirmed both have a moderate positive correlation of 0.6 and 0.7 respectively with GDP of the country yet both also have a weak relationship with GDP_per_capita. Breaking it down, this does logically make sense as normal GDP measures the absolute size of the economy, countries with bigger populations have larger GDPs but also is more prone to higher cases of Covid, on the other hand GDP per capita accounts for the population size which then shows more clearly that the relationship between Covid deaths and cases and GDP are not very strong.
+
+# Part 3: Applying Predictive Methods to Find Correlations and Trends in the Data
+
+This part of the investigation will apply two different predictive methods, multiple linear regression (MLR) and random forests to the Covid data in order to identify different trends and correlations as well as to see which predictive method performs better. For simplicity, the `aggregated_data` data frame created previously will be used for this analysis as it combines the entire covidDf panel data set into a cross sectional data set so time as a variable will not be considered.
+
+## Multiple Linear Regression
+
+For MLR the target variable will be the imputed value of cases_per_100k - covid cases per 100k people, all of the predictor variables of interest are log_cases_per_100k, log_gdp_per_capita, log_health_expenditure, nurses_per_1000, population_urban, elderly_pop_proportion, population_density, life_expectancy, smoking_prevalence, region. Cases_per_100k, health_expenditure_usd and gdp_per_capita_usd shown in Part 2 analysis and generally speaking are variables that are expected to have a stronger skewed distribution, to handle this skewness these variables are log transformed with log base 10. 
+
+```{r}
+pacman::p_load(tidymodels, car)
+
+aggregated_data <- aggregated_data %>% mutate(
+  cases_per_100k = (total_confirmed/population)*100000,
+  log_cases_per_100k = log10(cases_per_100k+ 1),
+  log_health_expenditure = log10(health_expenditure_usd + 1), 
+  log_gdp_per_capita = log10(gdp_per_capita_usd + 1)
+)
+```
+
+All of the variables mentioned previously that are being used for this MLR analysis is combined to make the predictiondata data frame which will be used as the prediction dataset for predicting log transformed cases per 100k people. Using the tidymodels R package, the prediction data is then randomly split; 20% into a testing set and 80% into a training set. In summary, the training set covid_train with 158 observations will be used to develop the MLR model, then the model will be tested against the covid_test data of 53 observations. 
+```{r}
+set.seed(111)
+mlr_predictiondata <- aggregated_data %>%
+  select(log_cases_per_100k, log_gdp_per_capita,
+         log_health_expenditure, 
+         nurses_per_1000, population_urban,
+         elderly_pop_proportion, population_density,
+         life_expectancy, smoking_prevalence,
+         region)
+
+mlr_split <- initial_split(mlr_predictiondata)
+mlr_split
+
+mlr_train <- training(mlr_split)
+mlr_test <- testing(mlr_split) 
+```
+The `recipe()` function from the car package is used to create a pre-processing blueprint for the data before modeling, this is named covid_recipe. In this case, it is primarily used to turn the categorical variable of region into dummy variables. 
+```{r}
+mlr_recipe <- recipe(log_cases_per_100k ~., data = mlr_train) %>%
+  step_dummy(all_nominal(), - all_outcomes())  %>%
+  prep()
+```
+
+The juice and bake functions applies the 'recipe' to the training and testing datasets previously specified. 
+```{r}
+mlr_train_preproc <- juice(mlr_recipe)
+mlr_test_preproc <- bake(mlr_recipe, mlr_test)
+```
+
+
+### Model Selection: Backwards Stepwise Selection
+
+When developing any prediction models, exclusion of important terms clearly leads to an incorrect model, which causes incorrect or misleading conclusions. However, including unnecessary terms diminishes the value of the model as a simplification of the data, and also reduces the statistical accuracy of predictions. This highlights the importance of model selection and as a part of this process the backwards stepwise selection method is used in order to filter out the more statistically insignificant variables. 
+
+The `Anova()` function tests whether each predictor variable significantly contributes to predicting to response variable individually whilst holding all other predictors constant. It returns the F-statistics and p-values for each variable's contirbution. Using this, starting with a function that includes all of the variables of interest, the variable that is the most statistically insignificant - highest p-value over 0.05 will be removed, the function is tested again and this is repeated until all variables remain statistically significant (p-value less than 0.05).  
+#### Step 1
+
+Here the interaction terms: 
+
+* log_gdp_per_capita:log_health_expenditure 
+* population_urban:population_density
+* elderly_pop_proportion:life_expectancy 
+
+are added as these variables are generally expected to interact with each other and have a combined affect on predicting the response variable. 
+x
+```{r}
+covid_lm0 <- lm(log_cases_per_100k~. + log_gdp_per_capita*log_health_expenditure
+                + population_density*population_urban
+                + life_expectancy*elderly_pop_proportion,
+                data = mlr_train_preproc)
+
+Anova(covid_lm0)
+```
+nurses_per_1000 had the highest p-value of 0.888; therefore it is removed in the next step.
+
+#### Step 2
+
+```{r}
+covid_lm1 <- lm(log_cases_per_100k~. -nurses_per_1000
+                + log_gdp_per_capita*log_health_expenditure
+                + population_density*population_urban
+                + life_expectancy*elderly_pop_proportion,
+                data = mlr_train_preproc)
+
+Anova(covid_lm1)
+```
+All of the interactino terms were all statistically insignificant, they are all removed for this step. 
+
+#### Step 3
+```{r}
+covid_lm2 <- lm(log_cases_per_100k~. -nurses_per_1000,
+                data = mlr_train_preproc)
+
+Anova(covid_lm2)
+```
+Although some of the dummy variables for region is insignificant since at least 1 dummy variable for the region variable is significant it is kept. Therefore, `elderly_pop_proportion` is the next highest p-value of 0.489 and therefore is removed. 
+
+#### Step 4
+```{r}
+covid_lm3 <- lm(log_cases_per_100k~. -nurses_per_1000 -elderly_pop_proportion,
+                data = mlr_train_preproc)
+
+Anova(covid_lm3)
+```
+`log_health_expenditure` has the highest p-value of 0.396
+
+#### Step 5
+```{r}
+covid_lm4 <- lm(log_cases_per_100k~. -nurses_per_1000 -elderly_pop_proportion
+                -log_health_expenditure,
+                data = mlr_train_preproc)
+
+Anova(covid_lm4)
+```
+Finally, since the investigation uses a 5% significance level, all of the variables now are statistically significant with p-values under 0.05. Therefore, covid_lm4 will represent the final MLR model for the dataset. 
+
+```{r}
+summary(covid_lm4)
+```
+The final linear regression model is:
+
+log_cases_per_100k = -3.032
++ 0.5384 * log_gdp_per_capita
+- 1.607e-9 * population_urban
+- 5.674e-5 * population_density
++ 0.05749 * life_expectancy
++ 0.02021 * smoking_prevalence
++ 0.1691 * region_Europe_Central_Asia
++ 0.5246 * region_Latin_America_Caribbean
++ 0.1566 * region_Middle_East_North_Africa
+- 0.1451 * region_North_America
++ 0.4510 * region_South_Asia
++ 0.5096 * region_Sub_Saharan_Africa
+
+Where the `region_*` variables are dummy indicators (1 if the country is in that region, 0 otherwise).
+
+### Model Selection: Analysis and Checking Assumptions
+
+The code below applies the covid_lm4 model to the previously specified testing data. The results are documented within the predictedvsactual tibble shown below; it contains both the log transformed values and the back transformed values for those log values for easier interpretations.  
+```{r}
+predicted_values <- predict(covid_lm4, newdata = mlr_test_preproc)
+predictedvsactual <- tibble(
+  `Log Predicted Values` = c(predicted_values),
+  `Log Actual Values` = c(mlr_test_preproc$log_cases_per_100k),
+  `Predicted Values` = c(10^predicted_values - 1),
+  `Actual Values` = c(10^(mlr_test_preproc$log_cases_per_100k) - 1)
+)
+
+predictedvsactual
+```
+
+This investigation will use the  R^2 value and the root mean squared error (RMSE) as metrics that measures a model's performance. The R^2 for linear models measures how much variance in the outcome can be explained by the model's prediction e.g., 1 meaning the model can explain 100% of the variation in the data whereas 0 means no predictive power; the closer to 1 the better. The R^2 value  the covid_lm4 MLR model is 0.5923, given by the summary() function used above, meaning that the model explains around ~59.23% of the variance in the testing data. 
+
+As for RMSE, it measures the difference between values predicted by the model and the actual values within the dataset. Unlike R^2 which describes the model's goodness of fit, RMSE shows the magnitude of which the predictions are accurate. It is calculated using the code below. 
+
+```{r}
+rmselm <- sqrt(mean((predictedvsactual$`Actual Values` -
+                       predictedvsactual$`Predicted Values`)^2))
+rmselm
+```
+The model's RMSE is 21328.82 (covid cases per 100k people)
+
+Using ggplot in combination with the `geom_point()` function a predicted vs actual scatter plot is created. A red dashed 45 degree line or the 'line of perfect prediction' is added using the `geom_abline()` function and the line of best fit is added using the `geom_smooth()` function. 
+```{r}
+predictedvsac_plot <-
+  predictedvsactual %>% ggplot(aes(x = `Actual Values`, y = `Predicted Values`)) +
+    geom_point() +
+    geom_smooth(method = "lm") +
+    geom_abline(intercept=0, slope = 1, linetype="dashed", color = "red") +
+    labs(title = "Predicted vs Actual Values - MLR") +
+    theme_minimal()
+
+predictedvsac_plot
+```
+_Figure 2.1:_ Scatter plot showing the predicted vs actual values from the covid_lm4 model. The predicted values are on the y-axis, actual values on x-axis. The red dotted line represents the trend line for an ideal model with perfect predictions, the blue line represent the model's actual trend line. The plot clearly shows that the trend line are consistently below the line of perfect prediction. 
+
+Shown in Figure 2.1, it can be seen that the model consistently under estimates the actual value of Covid cases per 100k people. This could occur for a variety of different reasons, but typically, this could be because the model is specified incorrectly potentially from the log transformations or linearity being an overall bad fit; there are also likely very important factors that are omitted including but not limited to testing rate, policy strictness, mobility etc...; there are also potentially other interaction terms that are significant but were not tested for. 
+
+
+For MLR the four main assumptions are to ensure the model is accurate and the predictor coefficients are reliable are:
+
+* Linearity
+* Normality
+* Homoscedasticity
+* Independence
+
+The plots below will be used to assess the validity of some of these assumptions. Starting with the 
+
+```{r}
+plot(covid_lm4, which = 1)
+```
+_Figure 2.2:_ Residuals (actual values - model's observed values) vs fitted values plot to check for linearity
+
+In Figure 2.2 the majority of points appears to be randomly scatted above and below the zero-line with no clear pattern, however there seems to be a slight grouping trend with the values to the right side of the plot, there are also a few outliers in the middle of the plot although this can be seen as negligible. Overall, the assumption of linearity appears. slightly violated. 
+
+```{r}
+plot(covid_lm4, which = 3)
+```
+_Figure 2.3:_ Scale location plot to test for homoscedasticity
+
+Shown in the scale-location plot in Figure 2.3, the assumption of homoscedasticity seems to be valid, the red line trend line is relatively flat and there are a consistent random scatter of points above and below it with no clear pattern.
+```{r}
+plot(covid_lm4, which = 2)
+```
+_Figure 2.4:_ QQ plot to test for normality
+
+Figure 2.4 shows that the majority of points lie on the 45 degree line with some deviations at the tails, a few points in particular have very large deviations. This shows that the majority of the residuals are approximately normally distributed, however, there does seem to be significant outliers. Due to this, the assumption is only marginally valid.
+
+Conclusions: 
+
+* Linearity: Partially invalid
+
+* Homoscedasticity: Valid
+
+* Normality: Mainly valid with some outliers
+
+* Independence: To truly confirm this assumption, information on how the data is collected is required. The aggregated_data data frame treats each country as its own self contained observation where independence between the residuals of each observation is technically plausible. However, the assumption is likely invalid since realistically neighboring countries or countries with similar policies will likely be dependent observations.
+
+Overall, the model is reasonably reliable, however, the model could be potentially improved with different types of variable transformations that would better validate the linearity assumption. In terms of precision, the model has moderate strength with an R^2 of 0.5923, speaking generally for social, health, and economic data since there are so many different underlying factors that are not included in the model an R^2 of 0.5-0.6 seems reasonable. Overall, the model can give meaningful insights, however there is still room to improve on. The RMSE calculated previously will help to compare this model with another model in this investigation
+
+## Regression Tree
+
+This part of the investigation will apply a regression tree model to try and predict covid_cases_per_100k using the same predictor variables. To do this the rpart and vip packages will be used to run and analyse the regression tree model. 
+
+The code below splits the aggregated data set into a prediction data set for the regression tree model. The process of splitting, defining the recipe, using `juice()` and `bake()` functions to specify the pre-processed are the exact same as the linear regression model, just without log transformations. Unlike multiple linear regression, regression tree does not assume linearity, therefore the log transformed variables may help stabilize variance but overall is not necessary.
+
+```{r}
+pacman::p_load(rpart, rpart.plot, vip) 
+
+set.seed(111)
+rt_predictiondata <- aggregated_data %>%
+  select(cases_per_100k, gdp_per_capita_usd,
+         health_expenditure_usd, 
+         nurses_per_1000, population_urban,
+         elderly_pop_proportion, population_density,
+         life_expectancy, smoking_prevalence,
+         region)
+
+rt_split <- initial_split(rt_predictiondata)
+rt_split
+
+rt_train <- training(rt_split)
+rt_test <- testing(rt_split) 
+
+
+rt_recipe <- recipe(cases_per_100k ~., data = rt_train) %>%
+  step_dummy(all_nominal(), - all_outcomes())  
+
+rt_recipe_prepped <- rt_recipe %>%
+  prep()
+
+rt_train_preproc <- juice(rt_recipe_prepped)
+rt_test_preproc <- bake(rt_recipe_prepped, rt_test)
+```
+The code below specifies the model and plots the regression tree. The extra parameters complexity parameter (cp) controls how much each addtional split in the tree must improve the model's fit by in terms of residual sum of squares; minsplit is the minimum number of observations required in a node before it can split to avoid very small and unrelaible split in the regression tree. 
+```{r}
+tree_model <- rpart(
+  cases_per_100k ~ .,
+  data = rt_train_preproc,
+  method = "anova",   # Using 'anova' for continuous outcomes
+  control = rpart.control(cp = 0.01, minsplit = 15)
+)
+
+
+rpart.plot(tree_model, type = 3, extra = 101, fallen.leaves = TRUE)
+
+```
+_Figure 2.5:_ The regression tree plot made using the training data specified previously from the covidDf aggregated_data dataset. The 14 predictor variables that were listed for the MLR model is also included here (8 numerical variables and 6 dummy variables for region). 
+
+The code below plots the variable importance plot (VIP).
+```{r}
+tree_model %>% 
+  vip(num_features = 14) + theme_minimal() +
+  labs(title = "VIP plot - Regression Tree")
+```
+_Figure 2.6:_ VIP plot for the regression tree model. The plot shows the which predictors are the most important determined by how much they reduce error and improve prediction accuracy. Shown here on this plot that a countries' elderly population proportion is the most important variable in determining deaths per 100k people. 
+
+The code below uses the regression tree model to predict the values of the testing data set. The yardstick R package and metrics() function is used to automatically calculate the RMSE (14126) and r^2 (0.5867) values shown in the output table below.
+```{r}
+case_per_100k_pred <- rt_test_preproc %>%
+  mutate(.pred = predict(tree_model, newdata = rt_test_preproc))
+
+library(yardstick)
+case_per_100k_pred %>%
+  metrics(truth = cases_per_100k, estimate = .pred)
+
+```
+
+Plotting the predicted vs actual values plot for the regression tree model 
+```{r}
+rt_pvs <-  case_per_100k_pred %>% ggplot(aes(x = `cases_per_100k`, y = `.pred`)) +
+      geom_point() +
+      geom_smooth(method = "lm") +
+      geom_abline(intercept=0, slope = 1, linetype="dashed", color = "red") +
+      labs(title = "Predicted vs Actual Values - Regression Tree",
+           x = "Actual Values",
+           y = "Predicted Values") +
+      theme_minimal()
+
+rt_pvs
+```
+_Figure 2.7:_ Predicted vs actual values scatter plot for the regression tree model. Shown in the plot there is a decent amount of variance in the points. Most points on the are close the the red dotted line which shows that the prediction was accurate, there are also some outlier predictions that heavily underestimated or overestimated the ratio of covid deaths per 100k people. 
+
+## Random Forests
+
+The performance of the regression trees vs linear regression will be discussed in more detail later, however, the simple regression trees model outperformed MLR in some regards while did a little worse in others. Therefore, random forests with hyper parameter tuning will be the final predictive method used in this investigation as a way to explore a more refined regression tree model's performance. Similarly, this method will be used to assess how well the 14 variables (including dummy variables for region) listed previously for MLR and regression trees perform at predicting covid cases per 100k people for a given country. Since a random forest is made up of multiple regression trees, the same training and testing sets made for the regression tree model `rt_train` and `rt_test` will be used for this predictive model as well. 
+
+However, for this model instead of manually assigning reasonable parameters similar to the regression tree model, some tuning will be done to calculate the optimal mtry and min_n parameter values for the model.
+
+- mtry: When calculating each tree, at a split mtry is the number of variables that will be randomly sampled 
+- min_n: A split in a tree is only allowed if the node where the split is happening have a least min_n observations
+
+Other things to note is that in the model specification code below, the other parameters e.g., trees are set to 500 so the model will train on 500 different trees; the engine is set the "ranger" which comes from the {ranger} package, it stands for Rapid Random Forest Generator and is designed for faster implementation of the random forest model for more complex datasets; finally the importance parameter is set to "permutation" which means the model will take into account the importance of each variable in the random forest. 
+```{r}
+pacman::p_load(tune, ranger)
+set.seed(111) 
+
+
+
+rf_spec <- rand_forest(
+  mode = "regression", 
+  trees = 500,
+  mtry = tune(), 
+  min_n = tune()
+) %>%
+  set_engine("ranger", importance = "permutation")
+
+
+```
+
+Using the vfold_cv() function, the training data is split into 5 folds. Additionally a parameters grid that contains all possible combinations based on the given parameters of mtry and min_n are created using the grid_regular function(). The finalize() function adjusts mtry to the maximum possible value based on the data excluding cases_per_100k since it is the target variable. The default min_n() is used for the min_n parameter and levels is set to 5 which means 5 equally spaced values are created for each parameter.  
+```{r}
+set.seed(111)
+covid_cv <- vfold_cv(rt_train, v = 5)
+
+params_grid <- grid_regular( finalize( mtry(), rt_train %>% select( -cases_per_100k ) ),
+                             min_n(),
+                             levels = 5)
+
+rf_tuned <- tune_grid( object = rf_spec,
+                       preprocessor = rt_recipe,
+                       resamples = covid_cv,
+                       grid = params_grid )
+```
+
+Here the select_best() function returns the combination of mtry and min_n that provides the lowest RMSE. The finalize_model() function updates the random forest model's specification (rf_spec) with the optimal combination of mtry and min_n found previously. Then the model is fitted with the training data for further assessment of the model's performance. 
+```{r}
+best_rmse <- select_best( rf_tuned, metric="rmse" )
+final_rf <- finalize_model( rf_spec, best_rmse )
+
+covid_rf <- final_rf %>% 
+  fit( cases_per_100k ~ . , data = rt_train )
+```
+
+```{r}
+covid_rf %>%
+  vip(num_features = 14) +
+  labs(title = "VIP plot - Random Forest") +
+  theme_minimal()
+```
+_Figure 2.8:_ VIP plot for the random forest model. The plot shows the which predictors are the most important determined by how much they reduce error and improve prediction accuracy.
+
+Figure 2.8's VIP plot is relatively similar to the regression tree model's VIP plot (Figure 2.6). The majority of the variables rank the same in terms of importance. A notable difference for the random forest VIP plot is that health expenditure is a lot closer to elderly population proportion in terms of importance, and the decrease in importance for each variable resembles a smooth exponential decrease as opposed to sharper decreases in the regression tree model's variables. This does seem to reflect the general nature of the two models as for regression tree, only a few variables are chosen for top splits and importance drops off sharply, random forest are built on bootstrapped samples so variables with less importance can still show up and potentially contribute more.
+
+Predicting cases per 100k people using the random forest model and calculating RMSE (12661) and r^2 (0.6413). 
+```{r}
+case_per_100k_pred_rf <- rt_test %>%
+  mutate(.pred = predict(covid_rf, new_data = rt_test) %>% pull(.pred))
+
+
+case_per_100k_pred_rf %>%
+  metrics(truth = cases_per_100k, estimate = .pred)
+
+```
+
+Plotting the predicted vs actual values plot for the random forest model using ggplot. 
+```{r}
+rf_pvs <-  case_per_100k_pred_rf %>% ggplot(aes(x = `cases_per_100k`, y = `.pred`)) +
+      geom_point() +
+      geom_smooth(method = "lm") +
+      geom_abline(intercept=0, slope = 1, linetype="dashed", color = "red") +
+      labs(title = "Predicted vs Actual Values - Random Forest",
+           x = "Actual Values",
+           y = "Predicted Values") +
+      theme_minimal()
+
+rf_pvs
+```
+_Figure 2.9:_ Predicted vs actual values scatter plot for the random forest model. The plot here is quite similar to the regression tree model's predicted vs actual values plot. However, here the points seem more tightly packed around the red dotted line which showing more accurate predictions and slightly less significant outliers.
+  
+
+# Comparison of the Models
+
+To give a final answer as to _which model should be chosen?_ This investigation will summarise and draw some final comparisons from the predicted vs actual values plot, R^2 values and RMSE as shown below.
+```{r}
+#Reformatting the plot titles to make the combined plot clearer
+rt_pvs <- rt_pvs + labs(
+  y = NULL,
+  title = "Regression Tree"
+)
+rf_pvs <- rf_pvs + labs(
+  y = NULL,
+  title = "Random Forest"
+)
+mlr_pvs <- predictedvsac_plot + labs(
+  title = "MLR"
+)
+
+#Combining the three plots previously made using patchwork library
+mlr_pvs + rt_pvs + rf_pvs
+```
+Shown in the comparison plots above, all of the models seems to generally underestimate the value of Covid cases per 100k, the random forest model appears to do it the least. It is clear that the points tend to scatter closer to the perfect prediction line for both the regression tree and random forest model compared to the MLR model. However, random forest seems to have points and the blue trend line align most tightly clustered with the perfect predictions line. Additionally, regression tree model shows consistent horizontal groupings of points, so the predictions are not smooth unlike MLR or random forest, which shows that regression trees can capture general patterns well but not be able to represent continuous variability in the data. For these reasons, the random forest model is the best here.
+
+The code below produces a table that summarises all of the RMSE and R^2 values of the different models calculated previously in the investigation. 
+```{r}
+model_results <- data.frame(
+  Model = c("Multiple Linear Regression", "Regression Tree", "Random Forest"),
+  RMSE = c(21328.82, 14126.46, 12660.69),
+  R_Squared = c(0.5923, 0.5867, 0.6413)
+)
+
+# Display it nicely as a table
+kable(model_results, 
+      caption = "Model Performance Comparison",
+      digits = 3,
+      col.names = c("Model", "RMSE", "R²"))
+```
+The MLR model has a higher R^2 but a lower RMSE compared to regression trees. This meaning that the MLR model is better than regression trees at making predictions close observed values but less consistent and makes larger errors per prediction. However, this is also to say that out of the three models the random forest model did the best in both regards. 
+
+In conclusion, the best performing model at predicting Covid cases per 100k people for a given country from 2020-2022 out of the three is the random forest model. This is shown through the predicted vs actual values plot; the highest R^2 which means the model is the best at explaining the variation in the response variable; the lowest RMSE value which measures the average prediction error between predicted and actual values of Covid cases per 100k people. 
