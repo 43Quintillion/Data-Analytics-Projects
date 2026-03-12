@@ -1,6 +1,5 @@
 ---
-title: "Final_Project"
-author: "Lam Bui (a1923599)"
+title: "Covid 19 Google Repository Data Analysis Report"
 date: "2025-09-19"
 output:
   pdf_document: default
